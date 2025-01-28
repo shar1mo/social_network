@@ -1,6 +1,9 @@
 package graph
 
 func DFS(g *Graph, start int) []int {
+	if len(g.Adj) == 0 {
+		return []int{}
+	}
 	visited := make(map[int]bool)
 	visited[start] = true
 	order := []int{}

@@ -1,14 +1,22 @@
 package graph
 
 type Graph struct {
-	Adj map[int][]int
+	Adj  map[int][]int
+	Edge []Edge
+}
+
+type Edge struct {
+	U, V, W int
 }
 
 func NewGraph() *Graph {
-	return &Graph{Adj: make(map[int][]int)}
+	return &Graph{
+		Adj:  make(map[int][]int),
+		Edge: []Edge{},
+	}
 }
 
-func (g *Graph) AddEdge(u, v int) {
+func (g *Graph) AddEdge(u, v, w int) {
 	if _, exists := g.Adj[u]; !exists {
 		g.Adj[u] = []int{}
 	}
@@ -17,6 +25,8 @@ func (g *Graph) AddEdge(u, v int) {
 	}
 	g.Adj[u] = append(g.Adj[u], v)
 	g.Adj[v] = append(g.Adj[v], u)
+
+	g.Edge = append(g.Edge, Edge{U: u, V: v, W: w})
 }
 
 func HasEdge(g *Graph, u, v int) bool {
@@ -50,4 +60,29 @@ func ConnectedComponents(g *Graph) (count int, comp map[int]int) {
 	}
 
 	return count, comp
+}
+
+func (g *Graph) GetAllEdges() []Edge {
+	var edges []Edge
+	// Перебираем каждую вершину
+	for u, neighbors := range g.Adj {
+		// Для каждого соседа вершины u
+		for _, v := range neighbors {
+			// Если u < v, добавляем ребро (u, v), иначе пропускаем
+			if u < v {
+				// Мы добавляем информацию о весе ребра. Допустим, что веса уже хранятся в g.Edge.
+				// Но если вес не был добавлен, то его можно добавить вручную при формировании ребра
+				var weight int // Вес можно добавить, если информация о весах имеется
+				// Пример: поиск веса ребра между u и v
+				for _, edge := range g.Edge {
+					if (edge.U == u && edge.V == v) || (edge.U == v && edge.V == u) {
+						weight = edge.W
+						break
+					}
+				}
+				edges = append(edges, Edge{U: u, V: v, W: weight})
+			}
+		}
+	}
+	return edges
 }
