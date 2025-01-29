@@ -14,7 +14,7 @@ func main() {
 	graph1.AddEdge(1, 5, 3)
 	graph1.AddEdge(6, 7, 2)
 
-	fmt.Println(graph.HasEdge(graph1, 1, 6))
+	fmt.Println(graph.HasEdge(graph1, 1, 5))
 
 	stack := &graph.Stack{}
 

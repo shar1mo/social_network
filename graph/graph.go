@@ -63,26 +63,37 @@ func ConnectedComponents(g *Graph) (count int, comp map[int]int) {
 }
 
 func (g *Graph) GetAllEdges() []Edge {
+	// Создаём карту для быстрого поиска веса ребра
+	weights := make(map[[2]int]int)
+	for _, edge := range g.Edge {
+		weights[[2]int{edge.U, edge.V}] = edge.W
+		weights[[2]int{edge.V, edge.U}] = edge.W // Для неориентированного графа
+	}
+
 	var edges []Edge
 	// Перебираем каждую вершину
 	for u, neighbors := range g.Adj {
-		// Для каждого соседа вершины u
 		for _, v := range neighbors {
-			// Если u < v, добавляем ребро (u, v), иначе пропускаем
+			// Избегаем дублирования рёбер, добавляя только (u, v) где u < v
 			if u < v {
-				// Мы добавляем информацию о весе ребра. Допустим, что веса уже хранятся в g.Edge.
-				// Но если вес не был добавлен, то его можно добавить вручную при формировании ребра
-				var weight int // Вес можно добавить, если информация о весах имеется
-				// Пример: поиск веса ребра между u и v
-				for _, edge := range g.Edge {
-					if (edge.U == u && edge.V == v) || (edge.U == v && edge.V == u) {
-						weight = edge.W
-						break
-					}
-				}
+				weight := weights[[2]int{u, v}]
 				edges = append(edges, Edge{U: u, V: v, W: weight})
 			}
 		}
 	}
 	return edges
+}
+
+func (g *Graph) GetNeighbors(u int) []struct{ V, W int } {
+	var neighbors []struct{ V, W int }
+
+	for _, v := range g.Adj[u] {
+		for _, edge := range g.Edge {
+			if (edge.U == u && edge.V == v) || (edge.U == v && edge.V == u) {
+				neighbors = append(neighbors, struct{ V, W int }{V: v, W: edge.W})
+				break
+			}
+		}
+	}
+	return neighbors
 }
