@@ -7,38 +7,32 @@ import (
 )
 
 func main() {
-	// Создаём 5 узлов
-	nodeIDs := []int{0, 1, 2, 3, 4}
-	var nodes []*distributed.Node
+	// Создаём 4 узла
+	nodeIDs := []int{0, 1, 2, 3}
+	var nodes []*distributed.BullyNode
 
 	for _, id := range nodeIDs {
-		nodes = append(nodes, distributed.NewNode(id))
+		nodes = append(nodes, distributed.NewBullyNode(id))
 	}
 
-	// Формируем кольцо
-	distributed.SetupRing(nodes)
+	// Формируем связи Bully
+	nodes[0].AddConnectBully([]*distributed.BullyNode{nodes[1], nodes[2], nodes[3]})
+	nodes[1].AddConnectBully([]*distributed.BullyNode{nodes[0], nodes[2], nodes[3]})
+	nodes[2].AddConnectBully([]*distributed.BullyNode{nodes[0], nodes[1], nodes[3]})
+	nodes[3].AddConnectBully([]*distributed.BullyNode{nodes[0], nodes[1], nodes[2]})
 
-	// Запускаем Ring-based Election с узла 0
-	go nodes[0].StartRingElection()
+	// Запускаем Listen() для каждого узла в отдельной горутине
 
-	// Даем время выбрать лидера
-	time.Sleep(3 * time.Second)
-
-	// Имитируем сбой: узел 3 "падает"
+	// Запускаем Bully с узла 0
+	nodes[2].Alive = false
 	nodes[3].Alive = false
-	fmt.Println("Node 3 отключен!")
 
-	// Даем лидеру собрать данные
-	for _, node := range nodes {
-		if node.LeaderID == node.ID {
-			go node.StartGlobalCollection()
-		}
-	}
-
-	time.Sleep(3 * time.Second)
+	go nodes[0].StartBullyElection()
+	// Даем время выбрать лидера
+	time.Sleep(15 * time.Second)
 
 	// Проверяем, кто стал лидером
 	for _, node := range nodes {
-		fmt.Printf("Node %d: Мой лидер %d, у меня %d пользователей\n", node.ID, node.LeaderID, node.LocalData)
+		fmt.Printf("Node %d: Мой лидер %d\n", node.ID, node.LeaderID)
 	}
 }
