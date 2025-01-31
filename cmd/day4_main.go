@@ -1,6 +1,12 @@
 package main
 
-import "sync"
+import (
+	"fmt"
+	"sync"
+	"time"
+
+	"golang.org/x/exp/rand"
+)
 
 // Роль узла
 type Role int
@@ -33,9 +39,11 @@ type LogEntry struct {
 
 // Структура узла
 type Node struct {
-	countVotes	int
+	resetTimer  chan struct{}
+	Alive       bool
+	countVotes  int
 	ID          int
-	LeaderID	int
+	LeaderID    int
 	Peers       []int
 	State       Role
 	CurrentTerm int
@@ -50,10 +58,11 @@ type Node struct {
 }
 
 func InitializeNodes(ids []int) map[int]*Node {
-    // Инициализируем узлы
-	result := map[int]*Node
-	for _, id := ids{
-		result[node] = Node{ID: id, State: Role{Follower}, LeaderID: -1, Peers: filter(ids, id), VotedFor: -1}
+	// Инициализируем узлы
+	var my_role Role = Follower
+	result := map[int]*Node{}
+	for _, id := range ids {
+		result[id] = &Node{Alive: true, ID: id, State: my_role, LeaderID: -1, Peers: filter(ids, id), VotedFor: -1, Inbox: make(chan Message, 100)}
 	}
 
 	return result
@@ -61,161 +70,164 @@ func InitializeNodes(ids []int) map[int]*Node {
 
 // Фильтрует список узлов, исключая текущий
 func filter(ids []int, exclude int) []int {
-    peers := []int{}
-    for _, id := range ids {
-        if id != exclude {
-            peers = append(peers, id)
-        }
-    }
-    return peers
+	peers := []int{}
+	for _, id := range ids {
+		if id != exclude {
+			peers = append(peers, id)
+		}
+	}
+	return peers
 }
 
 func (n *Node) Run(wg *sync.WaitGroup, nodes map[int]*Node) {
-    defer wg.Done()
-    go n.runElectionTimer(nodes)
-    for msg := range n.Inbox {
-        switch msg.Type {
-        case "RequestVote":
-            n.handleRequestVote(msg, nodes)
-        case "RequestVoteReply":
-            n.handleRequestVoteReply(msg, nodes)
-        case "AppendEntries":
-            n.handleAppendEntries(msg, nodes)
-        case "AppendEntriesReply":
-            n.handleAppendEntriesReply(msg, nodes)
-        }
-    }
+	defer wg.Done()
+	go n.runElectionTimer(nodes)
+	for msg := range n.Inbox {
+		switch msg.Type {
+		case "RequestVote":
+			n.handleRequestVote(msg, nodes)
+		case "RequestVoteReply":
+			n.handleRequestVoteReply(msg, nodes)
+		case "LeaderApply":
+			n.handleLeaderApply(msg, nodes)
+		case "HeartBeat":
+			n.handleHeartBeats(msg, nodes)
+		}
+	}
 }
 
 func (n *Node) runElectionTimer(nodes map[int]*Node) {
-    timeout := time.Duration(rand.Intn(150)+150) * time.Millisecond 
-    electionTimer := time.NewTimer(timeout)
+	timeout := time.Duration(rand.Intn(200)+200) * time.Millisecond
+	electionTimer := time.NewTimer(timeout)
 	for {
-        select {
-        case <-electionTimer.C:
-            n.mu.Lock()
-            if n.State == Follower {
-                n.state = Candidate // Переход в состояние кандидата
-                n.CurrentTerm++       // Увеличиваем текущий термин
-                n.VotedFor = n.ID     // Проголосовать за себя
-                n.mu.Unlock()
+		select {
+		case <-electionTimer.C:
+			fmt.Printf("%d: My timer stopped. Start election\n", n.ID)
+			if n.State == 0 {
+				print("Aboba")
+				n.State = Candidate // Переход в состояние кандидата
+				n.CurrentTerm++     // Увеличиваем текущий термин
+				n.VotedFor = n.ID   // Проголосовать за себя
+				// Запуск выборов
+				n.Inbox <- Message{Type: "RequestVoteReply", FromID: n.ID}
+			}
 
-                // Запуск выборов
-                n.Inbox <- Message{Type:"RequestVote"}
-            } else {
-                n.mu.Unlock()
-            }
+			timeout = time.Duration(rand.Intn(150)+150) * time.Millisecond
+			electionTimer.Reset(timeout)
 
-            timeout = time.Duration(rand.Intn(150)+150) * time.Millisecond
-            electionTimer.Reset(timeout)
-
-        }
-    }
+		case <-n.resetTimer:
+			// Сброс таймера при получении сигнала
+			fmt.Printf("%d: Resetting election timer\n", n.ID)
+			electionTimer.Reset(timeout)
+			if n.State != Leader { // Сброс таймера только если не лидер
+				fmt.Printf("%d: Resetting election timer\n", n.ID)
+				electionTimer.Reset(timeout)
+			} else {
+				fmt.Printf("%d: I am the leader, not resetting timer\n", n.ID)
+			}
+			n.sendHeartbeats(nodes)
+		}
+	}
 }
 
-
 func (n *Node) sendHeartbeats(nodes map[int]*Node) {
-	//логика отправки сообщений Heartbeats
- }
+	if n.State == Leader {
+		for _, peer := range n.Peers {
+			fmt.Printf("%d: Send HeartBeat to %d\n", n.ID, peer)
+			nodes[peer].Inbox <- Message{
+				Type:   "HeartBeat",
+				FromID: n.ID,
+				ToID:   peer,
+				Term:   n.CurrentTerm,
+			}
+		}
+	}
+}
+
+func (n *Node) handleHeartBeats(msg Message, nodes map[int]*Node) {
+	if n.Alive {
+		fmt.Printf("%d: Get HeartBeat from %d. Send OK\n", n.ID, msg.FromID)
+		n.resetTimer <- struct{}{} // Сброс таймера
+		nodes[msg.FromID].Inbox <- Message{
+			Type:   "OK",
+			FromID: n.ID,
+			ToID:   msg.FromID,
+		}
+	}
+}
+
+func (n *Node) handleLeaderApply(msg Message, nodes map[int]*Node) {
+	if n.Alive {
+		fmt.Printf("%d: Get LeaderApply from %d. Update my LeaderID\n", n.ID, msg.FromID)
+		n.LeaderID = msg.FromID
+		n.resetTimer <- struct{}{}
+	}
+}
 
 func (n *Node) handleRequestVote(msg Message, nodes map[int]*Node) {
-	if n.CurrentTerm < msg.Term && n.VotedFor == -1{
+	if n.CurrentTerm < msg.Term && n.VotedFor == -1 {
+		fmt.Printf("%d: Get RequestVote from %d. Update my CurrentTemp and cast my vote\n", n.ID, msg.FromID)
+		n.CurrentTerm = msg.Term
 		n.VotedFor = msg.FromID
-		nodes[msg.FromID].Inbox <- Message{Type:"RequestVoteReply", FromID: n.ID, ToID: msg.FromID, VoteGranted: true}
+		nodes[msg.FromID].Inbox <- Message{Type: "RequestVoteReply", FromID: n.ID, ToID: msg.FromID, VoteGranted: true}
+	} else {
+		fmt.Printf("%d: Get RequestVote from %d. Dont cast my vote\n", n.ID, msg.FromID)
+
 	}
 
-	
 }
 
 func (n *Node) handleRequestVoteReply(msg Message, nodes map[int]*Node) {
-	if n.countVotes == 0{
+	if n.countVotes == 0 {
+		fmt.Printf("%d: Get RequestVotesReply from %d\n", n.ID, msg.FromID)
 		n.countVotes++
-		for _, peer := n.Peers{
-			peer.Inbox <- Message{Type:"RequestVote",Term: n.CurrentTerm, FromID: n.ID, ToID: peer.ID}
+		for _, peer := range n.Peers {
+			fmt.Printf("%d: Send RequestVote to %d\n", n.ID, nodes[peer].ID)
+			nodes[peer].Inbox <- Message{Type: "RequestVote", Term: n.CurrentTerm, FromID: n.ID, ToID: nodes[peer].ID}
 		}
-	}else{
-		if msg.VoteGranted{
-			n.countVotes
-		}
-
-		if n.countVotes >= (len(nodes) - 1) /2 {
-			n.countVotes = 0
-			
-		}
-	}
-}
-
-func (n *Node) handleAppendEntries(msg Message, nodes map[int]*Node) {
-
-	// Если полученный термин больше текущего, обновляем текущий термин и переходим в состояние Follower
-	if msg.Term > n.CurrentTerm {
-		n.CurrentTerm = msg.Term
-		n.State = Follower
-		n.VotedFor = -1 // Сбрасываем голос
-	}
-
-	// Если термин меньше текущего, игнорируем сообщение
-	if msg.Term < n.CurrentTerm {
-		return
-	}
-
-	// Устанавливаем узел как Follower
-	n.State = Follower
-
-	// Проверяем, соответствует ли индекс последней записи в логе
-	if msg.LastLogIndex >= len(n.Log) || (msg.LastLogIndex >= 0 && n.Log[msg.LastLogIndex].Term != msg.LastLogTerm) {
-		// Если нет, отправляем ответ с успехом = false
-		nodes[msg.FromID].Inbox <- Message{Type: "AppendEntriesReply", Term: n.CurrentTerm, Success: false}
-		return
-	}
-
-	// Если все проверки пройдены, обновляем лог
-	n.Log = n.Log[:msg.LastLogIndex+1] // Обрезаем лог до нужного индекса
-	n.Log = append(n.Log, msg.Entries...) // Добавляем новые записи
-
-	// Обновляем индекс коммита
-	if msg.LeaderCommit > n.CommitIndex {
-		n.CommitIndex = min(msg.LeaderCommit, len(n.Log)-1)
-	}
-
-	// Отправляем ответ с успехом = true
-	nodes[msg.FromID].Inbox <- Message{Type: "AppendEntriesReply", Term: n.CurrentTerm, Success: true}
-}
-
-func (n *Node) handleAppendEntriesReply(msg Message, nodes map[int]*Node) {
-	n.mutex.Lock()
-	defer n.mutex.Unlock()
-
-	// Если полученный термин больше текущего, обновляем текущий термин и переходим в состояние Follower
-	if msg.Term > n.CurrentTerm {
-		n.CurrentTerm = msg.Term
-		n.State = Follower
-		n.VotedFor = -1 // Сбрасываем голос
-		return
-	}
-
-	// Если термин меньше текущего, игнорируем сообщение
-	if msg.Term < n.CurrentTerm {
-		return
-	}
-
-	// Обработка успешного ответа
-	if msg.Success {
-		// Увеличиваем индекс совпадения для узла
-		n.MatchIndex[msg.FromID] = len(n.Log) - 1
-		n.NextIndex[msg.FromID] = len(n.Log) // Обновляем индекс для следующего AppendEntries
-
-		// Обновляем CommitIndex, если есть необходимость
-		n.updateCommitIndex()
 	} else {
-		// Если неуспех, уменьшаем индекс следующего
-		n.NextIndex[msg.FromID]--
+		if msg.VoteGranted {
+			fmt.Printf("%d: Get Vote from %d. Update my CountVotes\n", n.ID, msg.FromID)
+			n.countVotes++
+		}
+
+		if n.countVotes >= (len(nodes)-1)/2 {
+			fmt.Printf("%d: My CountVotes more then half of all nodes. Reset my Votes\n", n.ID, msg.FromID)
+			n.State = Leader
+			n.countVotes = 0
+			for _, peer := range n.Peers {
+				fmt.Printf("%d: Send LeaderApply to %d\n", n.ID, nodes[peer].ID)
+				nodes[peer].Inbox <- Message{Type: "LeaderApply", FromID: n.ID, ToID: nodes[peer].ID}
+			}
+
+			go n.heartbeatLoop(nodes)
+
+		}
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+func (n *Node) heartbeatLoop(nodes map[int]*Node) {
+	for n.State == Leader {
+		n.sendHeartbeats(nodes)
+		//time.Sleep(100 * time.Millisecond) // Периодичность отправки Heartbeat
 	}
-	return b
+}
+
+func main() {
+	ids := []int{1, 2, 3}
+	nodes := InitializeNodes(ids)
+	var wg sync.WaitGroup
+	for _, node := range nodes {
+		wg.Add(1)
+		go node.Run(&wg, nodes)
+	}
+
+	time.Sleep(4 * time.Second)
+
+	for _, node := range nodes {
+		close(node.Inbox)
+	}
+
+	wg.Wait()
+
 }

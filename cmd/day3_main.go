@@ -27,7 +27,21 @@ func main() {
 	time.Sleep(6 * time.Second)
 
 	// Проверяем, кто стал лидером
+
+	var new_nodes []*distributed.BullyNode
+
+	for _, id := range nodeIDs {
+		new_nodes = append(new_nodes, distributed.NewBullyNode(id))
+	}
+
+	go new_nodes[0].StartBullyElection()
+
+	time.Sleep(6 * time.Second)
+
 	for _, node := range nodes {
-		fmt.Printf("Node %d: Мой лидер %d\n", node.ID, node.LeaderID)
+		if node.Alive {
+
+			fmt.Printf("Node %d: Мой лидер %d\n", node.ID, node.LeaderID)
+		}
 	}
 }
